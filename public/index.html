@@ -137,6 +137,17 @@
     font-size: 12px;
     color: #666;
   }
+  .results.multi { display: block; }
+  .result-group { margin-top: 28px; }
+  .result-group:first-child { margin-top: 0; }
+  .group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .group-head h3 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+  .group-head a { font-size: 13px; color: #1a1a1a; white-space: nowrap; }
+  .results-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .group-error { margin: 0; font-size: 13px; }
+  .file-list { list-style: none; margin: 10px 0 0; padding: 0; text-align: left; font-size: 13px; }
+  .file-list li { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid #eee; }
+  .file-list li span { overflow-wrap: anywhere; }
   .warnings {
     margin: 12px 0 0;
     padding: 10px 14px 10px 30px;
@@ -194,7 +205,10 @@
   .dev-list { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13px; }
   .dev-list li { margin: 2px 0; overflow-wrap: anywhere; }
   .dev-list .mark { display: inline-block; width: 1.4em; }
-  .dev-list .absent { color: #888; }
+  .dev-list .absent, .dev-list .info { color: #888; }
+  .dev-list .warn { color: #8a5a00; }
+  .dev-list .problem { color: #b3261e; }
+  .dev-sublabel { margin: 14px 0 2px; font-size: 12px; font-weight: 600; color: #444; }
   .dev-sub { list-style: none; margin: 2px 0 6px; padding-left: 1.4em; color: #666; font-size: 12px; }
   .dev-note { margin: 8px 0 0; font-size: 12px; color: #666; }
   .status { margin-top: 16px; font-size: 13px; color: #666; min-height: 18px; }
@@ -223,6 +237,17 @@
     padding: 8px;
   }
   .result a:hover { background: #1a1a1a; color: #fff; }
+  .result .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .result .actions a { margin-top: 0; }
+  .result .actions a[download] { flex: 1 1 auto; }
+  .result .actions a.view {
+    flex: 0 0 auto;
+    padding: 8px 14px;
+    font-weight: 500;
+    color: #444;
+    border-color: #bbb;
+  }
+  .result .actions a.view:hover { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
   #downloadAll {
     display: none;
     box-sizing: border-box;
@@ -246,7 +271,7 @@
     <img src="/logo.svg" alt="EmailBoutique">
   </a>
   <h1>Email Screenshot Tool</h1>
-  <p class="sub">Paste a rendered email's URL, or upload its HTML or .eml file. Get desktop &amp; mobile, light &amp; dark — full page, one click.</p>
+  <p class="sub">Paste a rendered email's URL, or upload HTML files or an .eml file. Get desktop &amp; mobile, light &amp; dark — full page, one click.</p>
 
   <div class="card">
     <div class="tabs">
@@ -259,7 +284,19 @@
         <input type="url" name="url" placeholder="https://example.com/your-rendered-email.html">
       </div>
       <div class="panel" data-panel="file">
-        <input type="file" name="htmlFile" accept=".html,.htm,text/html">
+        <div class="dropzone" id="htmlZone" role="button" tabindex="0" aria-label="Drop HTML files here, or press Enter to choose files">
+          <input type="file" name="htmlFile" accept=".html,.htm,text/html" multiple hidden>
+          <div id="htmlPrompt">
+            <strong>Drop .html files here</strong>
+            <span class="hint">or click to browse — you can add several</span>
+          </div>
+          <div id="htmlChosen" hidden>
+            <strong id="htmlName"></strong>
+            <button type="button" class="linkbtn" id="htmlRemove">Remove</button>
+            <ul class="file-list" id="htmlList" hidden></ul>
+            <span class="hint">Drop or click to add more files</span>
+          </div>
+        </div>
       </div>
 
       <div class="or-divider">OR</div>
@@ -366,7 +403,137 @@
       statusEl.classList.toggle("error", !!isError);
     }
 
-    // ---- .eml drop zone -------------------------------------------------
+    // ---- Drop zones (.eml and .html) ------------------------------------
+    // Shared behaviour: click / Enter opens the file picker, dragging highlights the
+    // zone, and dropping hands the dropped files to onFiles.
+    function wireDropZone(zone, { openPicker, isFilled, onFiles }) {
+      zone.addEventListener("click", (e) => {
+        if (e.target.closest(".linkbtn")) return;
+        if (!isFilled()) openPicker();
+      });
+      zone.addEventListener("keydown", (e) => {
+        if (e.target !== zone) return;
+        if ((e.key === "Enter" || e.key === " ") && !isFilled()) {
+          e.preventDefault();
+          openPicker();
+        }
+      });
+      ["dragenter", "dragover"].forEach((type) =>
+        zone.addEventListener(type, (e) => {
+          e.preventDefault();
+          zone.classList.add("dragover");
+        })
+      );
+      ["dragleave", "drop"].forEach((type) => zone.addEventListener(type, () => zone.classList.remove("dragover")));
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length) onFiles(files);
+      });
+    }
+    // A drop that misses a zone shouldn't make the browser navigate to the file.
+    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("drop", (e) => e.preventDefault());
+
+    // .html zone: one or several files. They are kept in JS and mirrored into the form's
+    // own <input name="htmlFile">, so the form still holds what will be submitted.
+    const MAX_HTML_FILES = 20;
+    let htmlFiles = [];
+    const htmlZone = document.getElementById("htmlZone");
+    const htmlPrompt = document.getElementById("htmlPrompt");
+    const htmlChosen = document.getElementById("htmlChosen");
+    const htmlName = document.getElementById("htmlName");
+    const htmlList = document.getElementById("htmlList");
+    const htmlRemove = document.getElementById("htmlRemove");
+    const fileKey = (f) => `${f.name}|${f.size}|${f.lastModified}`;
+
+    function syncHtmlInput() {
+      const transfer = new DataTransfer();
+      htmlFiles.forEach((f) => transfer.items.add(f));
+      htmlInput.files = transfer.files;
+    }
+    function renderHtmlChosen() {
+      htmlList.replaceChildren();
+      const has = htmlFiles.length > 0;
+      htmlZone.classList.toggle("has-file", has);
+      htmlPrompt.hidden = has;
+      htmlChosen.hidden = !has;
+      if (!has) return;
+      const many = htmlFiles.length > 1;
+      htmlName.textContent = many
+        ? `${htmlFiles.length} HTML files (${formatBytes(htmlFiles.reduce((sum, f) => sum + f.size, 0))})`
+        : `${htmlFiles[0].name} (${formatBytes(htmlFiles[0].size)})`;
+      htmlRemove.textContent = many ? "Remove all" : "Remove";
+      htmlList.hidden = !many;
+      if (many) {
+        for (const file of htmlFiles) {
+          const item = el("li");
+          item.append(el("span", null, `${file.name} (${formatBytes(file.size)})`));
+          const remove = el("button", "linkbtn", "Remove");
+          remove.type = "button";
+          remove.setAttribute("aria-label", `Remove ${file.name}`);
+          remove.addEventListener("click", () => {
+            htmlFiles = htmlFiles.filter((f) => f !== file);
+            syncHtmlInput();
+            renderHtmlChosen();
+          });
+          item.append(remove);
+          htmlList.append(item);
+        }
+      }
+    }
+    function clearHtml() {
+      htmlFiles = [];
+      syncHtmlInput();
+      renderHtmlChosen();
+    }
+    // Adds valid files to the list (dropping or picking more never replaces what's there).
+    function addHtmlFiles(files) {
+      const notHtml = [];
+      const tooBig = [];
+      let overLimit = 0;
+      let added = false;
+      for (const file of files) {
+        if (!/\.(html?|xhtml)$/i.test(file.name)) notHtml.push(file.name);
+        else if (file.size > MAX_UPLOAD_BYTES) tooBig.push(file.name);
+        else if (htmlFiles.some((f) => fileKey(f) === fileKey(file))) continue;
+        else if (htmlFiles.length >= MAX_HTML_FILES) overLimit++;
+        else {
+          htmlFiles.push(file);
+          added = true;
+        }
+      }
+      if (added) clearEml(); // one source at a time
+      syncHtmlInput();
+      renderHtmlChosen();
+
+      const problems = [];
+      if (notHtml.length === 1) {
+        problems.push(
+          `"${notHtml[0]}" isn't an HTML file. Drop a .html or .htm file${/\.eml$/i.test(notHtml[0]) ? " — .eml files go in the box below." : "."}`
+        );
+      } else if (notHtml.length > 1) {
+        problems.push(`${notHtml.length} files weren't HTML and were skipped (${notHtml.slice(0, 3).join(", ")}${notHtml.length > 3 ? ", …" : ""}).`);
+      }
+      if (tooBig.length) {
+        problems.push(`${plural(tooBig.length, "file is", "files are")} over ${formatBytes(MAX_UPLOAD_BYTES)} and ${tooBig.length === 1 ? "was" : "were"} skipped (${tooBig.slice(0, 3).join(", ")}).`);
+      }
+      if (overLimit) problems.push(`Only ${MAX_HTML_FILES} files at a time — ${plural(overLimit, "file was", "files were")} skipped.`);
+      if (problems.length) showStatus(problems.join(" "), true);
+      else if (added) showStatus("", false);
+    }
+    wireDropZone(htmlZone, {
+      openPicker: () => htmlInput.click(),
+      isFilled: () => false, // clicking or dropping always adds more files
+      onFiles: addHtmlFiles,
+    });
+    htmlRemove.addEventListener("click", clearHtml);
+    htmlInput.addEventListener("change", () => {
+      const picked = Array.from(htmlInput.files);
+      if (picked.length) addHtmlFiles(picked);
+    });
+
+    // .eml zone. The file is kept in JS and added to the request on submit.
     let emlFile = null;
     const emlZone = document.getElementById("emlZone");
     const emlInput = document.getElementById("emlInput");
@@ -383,16 +550,21 @@
     }
     function setEml(file) {
       if (!/\.eml$/i.test(file.name)) {
-        showStatus(`"${file.name}" isn't an .eml file. Drop a file whose name ends in .eml.`, true);
+        emlInput.value = "";
+        showStatus(
+          `"${file.name}" isn't an .eml file. Drop a file whose name ends in .eml${/\.html?$/i.test(file.name) ? " — HTML files go in the Upload HTML tab." : "."}`,
+          true
+        );
         return;
       }
       if (file.size > MAX_UPLOAD_BYTES) {
+        emlInput.value = "";
         showStatus(`That file is ${formatBytes(file.size)}. The limit is ${formatBytes(MAX_UPLOAD_BYTES)}.`, true);
         return;
       }
       // One source at a time: choosing an .eml clears the URL / HTML inputs.
       urlInput.value = "";
-      htmlInput.value = "";
+      clearHtml();
       emlFile = file;
       emlName.textContent = `${file.name} (${formatBytes(file.size)})`;
       emlZone.classList.add("has-file");
@@ -400,44 +572,19 @@
       emlChosen.hidden = false;
       showStatus("", false);
     }
-
-    emlZone.addEventListener("click", (e) => {
-      if (e.target.closest("#emlRemove")) return;
-      if (!emlFile) emlInput.click();
-    });
-    emlZone.addEventListener("keydown", (e) => {
-      if ((e.key === "Enter" || e.key === " ") && !emlFile) {
-        e.preventDefault();
-        emlInput.click();
-      }
+    wireDropZone(emlZone, {
+      openPicker: () => emlInput.click(),
+      isFilled: () => !!emlFile,
+      onFiles: (files) => setEml(files[0]),
     });
     document.getElementById("emlRemove").addEventListener("click", clearEml);
     emlInput.addEventListener("change", () => {
       if (emlInput.files[0]) setEml(emlInput.files[0]);
     });
-    ["dragenter", "dragover"].forEach((type) =>
-      emlZone.addEventListener(type, (e) => {
-        e.preventDefault();
-        emlZone.classList.add("dragover");
-      })
-    );
-    ["dragleave", "drop"].forEach((type) =>
-      emlZone.addEventListener(type, () => emlZone.classList.remove("dragover"))
-    );
-    emlZone.addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (e.dataTransfer.files[0]) setEml(e.dataTransfer.files[0]);
-    });
-    // A drop that misses the zone shouldn't make the browser navigate to the file.
-    window.addEventListener("dragover", (e) => e.preventDefault());
-    window.addEventListener("drop", (e) => e.preventDefault());
 
-    // Using the existing inputs again replaces a chosen .eml.
+    // Typing a URL replaces a chosen .eml.
     urlInput.addEventListener("input", () => {
       if (urlInput.value) clearEml();
-    });
-    htmlInput.addEventListener("change", () => {
-      if (htmlInput.files.length) clearEml();
     });
 
     // ---- Screenshot widths ----------------------------------------------
@@ -477,25 +624,33 @@
 
     // ---- Portfolio / Developer ------------------------------------------
     let mode = "portfolio";
-    let lastData = null;
+    // One entry per generated email: { name, data | error, gridEl, panelEl }.
+    let entries = [];
 
-    function renderResults() {
-      resultsEl.replaceChildren();
-      for (const key of Object.keys(lastData.images)) {
-        const { label, href } = lastData.images[key];
+    function renderEntryResults(entry) {
+      entry.gridEl.replaceChildren();
+      for (const key of Object.keys(entry.data.images)) {
+        const { label, href } = entry.data.images[key];
         const card = el("div", "result");
         const img = el("img");
         img.src = href;
         img.alt = label;
         img.style.cssText = "max-width:100%; max-height:120px; object-fit:contain;";
+        const actions = el("div", "actions");
         const link = el("a", null, label);
         link.href = href;
         link.download = "";
-        card.append(img, link);
+        const view = el("a", "view", "View");
+        view.href = href;
+        view.target = "_blank";
+        view.rel = "noopener";
+        view.setAttribute("aria-label", `View ${label} in a new tab`);
+        actions.append(link, view);
+        card.append(img, actions);
         if (mode === "developer" && key.endsWith("-dark")) {
           card.append(el("span", "badge", "Browser Dark Mode Preview"));
         }
-        resultsEl.appendChild(card);
+        entry.gridEl.appendChild(card);
       }
     }
 
@@ -511,9 +666,10 @@
     }
     function devList(items) {
       const ul = el("ul", "dev-list");
+      const anyMark = items.some((item) => item.mark);
       for (const item of items) {
         const li = el("li", item.className);
-        if (item.mark) li.append(el("span", "mark", item.mark));
+        if (item.mark || anyMark) li.append(el("span", "mark", item.mark || ""));
         li.append(document.createTextNode(item.text));
         ul.append(li);
         if (item.sub && item.sub.length) {
@@ -525,16 +681,94 @@
       return ul;
     }
 
-    function renderDevPanel(data) {
+    const MARKS = { ok: "✓", problem: "✕", warn: "!", info: "•" };
+    function rowItems(rows) {
+      return rows.map((row) => ({ mark: MARKS[row.level] || "•", className: row.level, text: row.text, sub: row.details }));
+    }
+    const ESP_CONFIDENCE = { high: "high confidence", likely: "likely", possible: "possible" };
+
+    function renderDeliverability(data) {
+      if (!data.email) return null;
+      const dv = data.email.deliverability;
+      const section = devSection("Deliverability");
+      if (!dv) {
+        section.append(el("p", "dev-note", "The deliverability checks couldn't be completed for this email."));
+        return section;
+      }
+
+      if (dv.findings.length) {
+        section.append(el("p", "dev-sublabel", "Needs attention"));
+        section.append(devList(dv.findings.map((f) => ({ mark: "✕", className: "problem", text: f.text }))));
+      } else {
+        section.append(devList([{ mark: "✓", text: "No problems found in the checks below" }]));
+      }
+
+      section.append(el("p", "dev-sublabel", "Email service provider (ESP)"));
+      if (dv.esp) {
+        section.append(devList([{ text: `${dv.esp.name} — ${ESP_CONFIDENCE[dv.esp.confidence] || dv.esp.confidence}`, sub: dv.esp.evidence }]));
+        if (dv.esp.others.length) {
+          section.append(el("p", "dev-note", `Also matched: ${dv.esp.others.map((o) => o.name).join(", ")}`));
+        }
+      } else {
+        section.append(
+          el("p", "dev-note", "No known ESP was identified from this email's headers and links. It may have been sent from the company's own mail server, or by a provider that isn't in this tool's list.")
+        );
+      }
+
+      const auth = dv.authentication;
+      section.append(
+        el("p", "dev-sublabel", `As recorded when the email was delivered${auth.receiver ? ` (by ${auth.receiver})` : ""}`)
+      );
+      if (auth.rows.length) section.append(devList(rowItems(auth.rows)));
+      for (const note of auth.notes) section.append(el("p", "dev-note", note));
+
+      section.append(el("p", "dev-sublabel", "Sender's DNS records (checked just now — may differ from when the email was sent)"));
+      if (dv.dns.rows.length) section.append(devList(rowItems(dv.dns.rows)));
+      else section.append(el("p", "dev-note", "No domains could be identified to check."));
+
+      section.append(
+        el("p", "dev-note", "SPF, DKIM and DMARC are not re-verified by this tool. The first list is what the receiving mail server recorded; the second checks that the sender's DNS records exist and look sensible.")
+      );
+      return section;
+    }
+
+    function renderDevPanel(data, panel) {
       const d = data.diagnostics;
-      devPanel.replaceChildren();
+      panel.replaceChildren();
+
+      // Subject & preheader
+      const inbox = devSection("Subject & preheader");
+      const preview = data.preview || {};
+      const chars = (text) => plural([...text].length, "character", "characters");
+      const inboxRows = [
+        [
+          "Subject",
+          preview.subject
+            ? `${preview.subject} (${chars(preview.subject)})`
+            : d.source.kind === "eml"
+              ? "(no subject)"
+              : "Only .eml files include a subject line",
+        ],
+      ];
+      const pre = preview.preheader;
+      if (pre && pre.source === "hidden") {
+        inboxRows.push(["Preheader", `${pre.text}${pre.length > pre.text.length ? "…" : ""} (${plural(pre.length, "character", "characters")})`]);
+        inboxRows.push(["Preheader source", "Hidden preview text at the top of the email"]);
+      } else if (pre && pre.source === "body") {
+        inboxRows.push(["Preheader", "None set — inboxes will preview the first text in the body:"]);
+        inboxRows.push(["", `${pre.text}${pre.length > pre.text.length ? "…" : ""}`]);
+      } else {
+        inboxRows.push(["Preheader", "No text found at the top of the email"]);
+      }
+      inbox.append(devRows(inboxRows));
+      inbox.append(el("p", "dev-note", "Inbox apps and screen widths show different amounts of the subject and preheader."));
+      panel.append(inbox);
 
       // Source
       const source = devSection("Source");
       const pairs = [["Source", d.source.label + (d.source.filename ? ` — ${d.source.filename}` : "")]];
       if (d.source.url) pairs.push(["URL", d.source.url]);
       if (data.email) {
-        pairs.push(["Subject", data.email.subject || "(none)"]);
         for (const [name, value] of Object.entries(data.email.headers)) pairs.push([name, value]);
         pairs.push(["Body", data.email.usedTextFallback ? "Plain text only (no HTML version)" : "HTML"]);
         const attachments = data.email.attachments;
@@ -553,7 +787,10 @@
           )
         );
       }
-      devPanel.append(source);
+      panel.append(source);
+
+      const deliverability = renderDeliverability(data);
+      if (deliverability) panel.append(deliverability);
 
       // Dark mode support
       const dark = devSection("Dark Mode Support");
@@ -581,7 +818,7 @@
           )
         );
       }
-      devPanel.append(dark);
+      panel.append(dark);
 
       if (!d.html) return;
 
@@ -591,7 +828,7 @@
       if (d.html.bytes > 102 * 1024) {
         html.append(el("p", "dev-note", "Gmail may clip messages larger than roughly 102 KB of HTML."));
       }
-      devPanel.append(html);
+      panel.append(html);
 
       // Images
       const im = d.images;
@@ -620,8 +857,44 @@
       }
       if (im.missingWidth) items.push({ text: `${plural(im.missingWidth, "image", "images")} without a width attribute` });
       if (im.missingHeight) items.push({ text: `${plural(im.missingHeight, "image", "images")} without a height attribute` });
+
+      if (im.total) {
+        if (im.alt.missing.count) {
+          items.push({
+            mark: "!",
+            className: "warn",
+            text: `${plural(im.alt.missing.count, "image", "images")} without an alt attribute`,
+            sub: im.alt.missing.items.map((i) => i.src),
+          });
+        } else {
+          items.push({ mark: "✓", text: "All images have an alt attribute" });
+        }
+        if (im.alt.empty) {
+          items.push({ text: `${plural(im.alt.empty, "image has", "images have")} an empty alt (treated as decorative)` });
+        }
+        if (im.size.large.count) {
+          items.push({
+            mark: "!",
+            className: "warn",
+            text: `${plural(im.size.large.count, "image", "images")} over ${formatBytes(im.size.thresholdBytes)}`,
+            sub: im.size.large.items.map((i) => `${i.src} — ${formatBytes(i.bytes)}`),
+          });
+        } else if (im.size.knownCount) {
+          items.push({ mark: "✓", text: `No images over ${formatBytes(im.size.thresholdBytes)}` });
+        }
+        items.push({
+          text: im.size.knownCount
+            ? `Total image weight: ${formatBytes(im.size.totalBytes)}${im.size.unknownCount ? ` (${plural(im.size.unknownCount, "image", "images")} with unknown size not counted)` : ""}`
+            : "Image sizes couldn't be determined",
+        });
+      }
       images.append(devList(items));
-      devPanel.append(images);
+      if (im.total) {
+        images.append(
+          el("p", "dev-note", `Images over ${formatBytes(im.size.thresholdBytes)} are flagged as a rule of thumb for email, not a hard limit. Sizes are what was downloaded (or embedded in the .eml); images set as CSS backgrounds aren't included.`)
+        );
+      }
+      panel.append(images);
 
       // Structure
       const st = d.structure;
@@ -641,9 +914,18 @@
           : "No tables detected",
       ]);
       structure.append(devRows(rows));
-      devPanel.append(structure);
+      panel.append(structure);
     }
 
+    function applyMode() {
+      document.getElementById("portfolioNote").hidden = mode !== "portfolio";
+      document.getElementById("developerNote").hidden = mode !== "developer";
+      for (const entry of entries) {
+        if (!entry.data) continue;
+        renderEntryResults(entry);
+        entry.panelEl.hidden = mode !== "developer";
+      }
+    }
     function setMode(next) {
       mode = next;
       document.querySelectorAll(".mode-btn").forEach((btn) => {
@@ -651,63 +933,158 @@
         btn.classList.toggle("active", active);
         btn.setAttribute("aria-selected", String(active));
       });
-      document.getElementById("portfolioNote").hidden = mode !== "portfolio";
-      document.getElementById("developerNote").hidden = mode !== "developer";
-      devPanel.hidden = mode !== "developer" || !lastData;
-      if (lastData) renderResults();
+      applyMode();
     }
     document.querySelectorAll(".mode-btn").forEach((btn) =>
       btn.addEventListener("click", () => setMode(btn.dataset.mode))
     );
 
     // ---- Generate -------------------------------------------------------
+    // Runs one request and never throws: the outcome is { data } or { error }.
+    async function runJob(formData) {
+      let res;
+      try {
+        res = await fetch("/generate", { method: "POST", body: formData });
+      } catch {
+        return { error: "Couldn't reach the tool's server. Make sure npm start is still running in your terminal." };
+      }
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        return { error: "The server sent an unexpected response. Check the terminal running npm start for details." };
+      }
+      if (!res.ok) return { error: data.error || "Something went wrong." };
+      return { data };
+    }
+
+    function newFormData() {
+      const formData = new FormData();
+      formData.append("desktopWidth", desktopInput.value);
+      formData.append("mobileWidth", mobileInput.value);
+      return formData;
+    }
+
+    // The Developer panel is optional detail. If building it ever fails, the screenshots
+    // must still show, so contain the failure here instead of letting it stop the page.
+    function renderDevPanelSafely(data, panel) {
+      try {
+        renderDevPanel(data, panel);
+      } catch (err) {
+        console.error("Couldn't build the Developer panel:", err);
+        panel.replaceChildren(
+          el("p", "dev-note", "Developer details couldn't be shown for this email. The screenshots are unaffected — if you just updated the tool, restart npm start and try again.")
+        );
+      }
+    }
+
+    // One email: the same layout the tool has always had.
+    function showSingle(outcome) {
+      const data = outcome.data;
+      entries = [{ name: outcome.name, data, gridEl: resultsEl, panelEl: devPanel }];
+      warningsEl.replaceChildren(...(data.warnings || []).map((w) => el("li", null, w)));
+      warningsEl.hidden = !(data.warnings && data.warnings.length);
+      renderDevPanelSafely(data, devPanel);
+      downloadAllEl.href = `/download-all/${data.jobId}`;
+      downloadAllEl.style.display = "block";
+      modeBar.hidden = false;
+      setMode(mode);
+    }
+
+    // Several emails: one group per file, each with its own screenshots and notes.
+    function showBatch(outcomes) {
+      resultsEl.classList.add("multi");
+      for (const outcome of outcomes) {
+        const group = el("section", "result-group");
+        const head = el("div", "group-head");
+        head.append(el("h3", null, outcome.name));
+        group.append(head);
+        if (outcome.error) {
+          group.append(el("p", "group-error error", outcome.error));
+          entries.push({ name: outcome.name, error: outcome.error });
+        } else {
+          const zip = el("a", null, "Download .zip");
+          zip.href = `/download-all/${outcome.data.jobId}`;
+          zip.download = "";
+          head.append(zip);
+          if (outcome.data.warnings && outcome.data.warnings.length) {
+            const notes = el("ul", "warnings");
+            for (const w of outcome.data.warnings) notes.append(el("li", null, w));
+            group.append(notes);
+          }
+          const gridEl = el("div", "results-grid");
+          const panelEl = el("div", "dev-panel");
+          panelEl.hidden = true;
+          group.append(gridEl, panelEl);
+          renderDevPanelSafely(outcome.data, panelEl);
+          entries.push({ name: outcome.name, data: outcome.data, gridEl, panelEl });
+        }
+        resultsEl.append(group);
+      }
+      const done = entries.filter((entry) => entry.data);
+      const failed = entries.length - done.length;
+      showStatus(
+        failed
+          ? `Done — ${done.length} of ${entries.length} emails rendered; ${failed} couldn't be rendered.`
+          : `Done — all ${entries.length} emails rendered.`,
+        done.length === 0
+      );
+      if (done.length) {
+        downloadAllEl.href = `/download-batch?${done.map((entry) => `j=${entry.data.jobId}.${encodeURIComponent(entry.name)}`).join("&")}`;
+        downloadAllEl.style.display = "block";
+        modeBar.hidden = false;
+        setMode(mode);
+      }
+    }
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       resultsEl.replaceChildren();
+      resultsEl.classList.remove("multi");
       downloadAllEl.style.display = "none";
       warningsEl.hidden = true;
       modeBar.hidden = true;
       devPanel.hidden = true;
-      lastData = null;
-      showStatus("Rendering all four versions — this takes a few seconds…", false);
+      entries = [];
       submitBtn.disabled = true;
 
-      const formData = new FormData(form);
+      // One job per source. Several HTML files become several jobs, rendered one after another.
+      const jobs = [];
       if (emlFile) {
-        formData.delete("url");
-        formData.delete("htmlFile");
+        const formData = newFormData();
         formData.append("emlFile", emlFile);
+        jobs.push({ name: emlFile.name, formData });
+      } else if (document.querySelector(".tab.active").dataset.tab === "file") {
+        if (htmlFiles.length === 0) jobs.push({ name: "", formData: newFormData() }); // the server explains what's missing
+        for (const file of htmlFiles) {
+          const formData = newFormData();
+          formData.append("htmlFile", file);
+          jobs.push({ name: file.name, formData });
+        }
       } else {
-        const activeTab = document.querySelector(".tab.active").dataset.tab;
-        if (activeTab === "url") formData.delete("htmlFile");
-        else formData.delete("url");
+        const formData = newFormData();
+        formData.append("url", urlInput.value);
+        jobs.push({ name: urlInput.value, formData });
       }
 
       try {
-        let res;
-        try {
-          res = await fetch("/generate", { method: "POST", body: formData });
-        } catch {
-          throw new Error("Couldn't reach the tool's server. Make sure npm start is still running in your terminal.");
+        const outcomes = [];
+        for (let i = 0; i < jobs.length; i++) {
+          showStatus(
+            jobs.length > 1
+              ? `Rendering ${i + 1} of ${jobs.length}: ${jobs[i].name}…`
+              : "Rendering all four versions — this takes a few seconds…",
+            false
+          );
+          outcomes.push({ name: jobs[i].name, ...(await runJob(jobs[i].formData)) });
         }
-        let data;
-        try {
-          data = await res.json();
-        } catch {
-          throw new Error("The server sent an unexpected response. Check the terminal running npm start for details.");
+        if (outcomes.length === 1) {
+          if (outcomes[0].error) throw new Error(outcomes[0].error);
+          showStatus("Done.", false);
+          showSingle(outcomes[0]);
+        } else {
+          showBatch(outcomes);
         }
-        if (!res.ok) throw new Error(data.error || "Something went wrong.");
-
-        showStatus("Done.", false);
-        lastData = data;
-        warningsEl.replaceChildren(...(data.warnings || []).map((w) => el("li", null, w)));
-        warningsEl.hidden = !(data.warnings && data.warnings.length);
-        renderDevPanel(data);
-        renderResults();
-        downloadAllEl.href = `/download-all/${data.jobId}`;
-        downloadAllEl.style.display = "block";
-        modeBar.hidden = false;
-        setMode(mode);
       } catch (err) {
         showStatus(err.message, true);
       } finally {

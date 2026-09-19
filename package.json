@@ -12,6 +12,7 @@
     "express": "^4.19.2",
     "mailparser": "^3.9.28",
     "multer": "^2.0.0",
-    "puppeteer": "^25.0.0"
+    "puppeteer": "^25.0.0",
+    "tldts": "^7.4.13"
   }
 }

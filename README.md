@@ -38,11 +38,30 @@ Use **one** of these per run:
 | Input | How |
 |---|---|
 | **A URL** | "Paste a URL" tab — any rendered email or web page reachable from your machine (ESP preview, CMS, staging, local dev server). |
-| **An HTML file** | "Upload HTML" tab — a `.html` / `.htm` file. |
+| **HTML files** | "Upload HTML" tab — drag one **or several** `.html` / `.htm` files onto the **Drop .html files here** box (or click the box to browse). See [Several HTML files at once](#several-html-files-at-once). |
 | **An `.eml` file** | Drag it onto the **Drop .eml file here** box (or click the box to browse). |
 
 Choosing an `.eml` clears the URL / HTML input, and typing a URL or picking an
 HTML file clears the `.eml` — only one source is ever used.
+
+### Several HTML files at once
+
+Drop or pick as many as 20 HTML files and the tool renders them one after
+another (roughly 7 seconds each), with progress shown as "Rendering 2 of 5: …".
+
+- The files you drop are **added** to the list, never replacing it. Duplicates are
+  ignored, files that aren't HTML are skipped with a message, and each file has
+  its own **Remove** link (or **Remove all**).
+- Results are **grouped by email**, headed by the file name. Each group has its
+  four screenshots with Download and View buttons, its own **Download .zip**, and
+  its own notes and Developer Mode panel.
+- The main **Download all (.zip)** button gives you one zip with a **folder per
+  email**: `newsletter/desktop-light.png`, `newsletter/mobile-dark.png`, and so on.
+  Two files with the same name get separate folders (`email`, `email-2`).
+- **One bad file doesn't stop the rest.** A file that can't be rendered shows its
+  error in its own group; the others complete and are included in the zip.
+- Width settings apply to every file in the batch. `.eml` files and URLs are still
+  one at a time.
 
 ## Portfolio Mode
 
@@ -55,7 +74,8 @@ consistent screenshots of the email's *intended* design:
 - Mobile — Dark
 
 Each one is a full-page PNG (the whole email, top to bottom) with its own
-download button, plus **Download all (.zip)** for all four at once.
+download button and a **View** button beside it that opens the full-size
+screenshot in a new tab, plus **Download all (.zip)** for all four at once.
 
 > Clean, consistent screenshots showing the intended light and dark mode design.
 > Browser-based rendering; not an inbox-client simulation.
@@ -71,12 +91,19 @@ work.
 
 Flip the **[ Portfolio ] [ Developer ]** toggle above the results. The
 screenshots stay the same; the dark ones are labelled **Browser Dark Mode
-Preview**, and a panel of technical information appears below them. Everything
-in it is read from the email's source — nothing is guessed:
+Preview**, and a panel of technical information appears below them. It is read
+from the email's source or measured while rendering. The one inference is the ESP,
+which is matched from known patterns and shown with its evidence and a confidence
+level:
 
-- **Source** — where the email came from. For `.eml` files: subject, From, To,
-  Cc, Reply-To, Date, Message-ID, Return-Path, List-Unsubscribe, X-Mailer, whether
+- **Subject & preheader** — the subject line (`.eml` only) and the preheader:
+  the hidden preview text at the top of the email if there is one, otherwise the
+  first text in the body, which is what inboxes will preview. Character counts
+  are shown. Inbox apps show different amounts of both, so no pass/fail is given.
+- **Source** — where the email came from. For `.eml` files: From, To, Cc,
+  Reply-To, Date, Message-ID, Return-Path, List-Unsubscribe, X-Mailer, whether
   it had an HTML body, inline (CID) image count, and a list of attachments.
+- **Deliverability** (`.eml` only) — see [below](#deliverability-eml-files-only).
 - **Dark Mode Support** — which of these techniques the HTML contains:
   `@media (prefers-color-scheme: dark)`, `<meta name="color-scheme">`,
   `<meta name="supported-color-schemes">`, Outlook `[data-ogsc]` and
@@ -86,7 +113,11 @@ in it is read from the email's source — nothing is guessed:
 - **Images** — number of `<img>` elements; remote, embedded (`data:`) and CID
   counts; CID references that don't exist in the `.eml`; images that failed to
   load (with URL and reason); requests that were blocked; images missing `width`
-  or `height` attributes.
+  or `height` attributes; images **without an `alt` attribute** (an empty
+  `alt=""` is counted separately as decorative, which is valid); images **over
+  200 KB**, with their sizes; and the total image weight. The 200 KB line is a
+  common rule of thumb for email, not a hard limit. Sizes are what was
+  downloaded (or embedded in the `.eml`); CSS background images aren't included.
 - **Structure** — approximate container width (the widest fixed pixel width
   declared on a table/div/td), width-based `@media` queries and their
   breakpoints, and how many tables use `role="presentation"`.
@@ -98,6 +129,49 @@ relevant to particular clients.
 Limits of the analysis: it looks at the email's own HTML, including `<style>`
 blocks. It does not follow linked stylesheets, and "container width" is only
 shown when the HTML declares a fixed width it can read.
+
+### Deliverability (`.eml` files only)
+
+For `.eml` uploads, Developer Mode adds a **Deliverability** section. A **Needs
+attention** list at the top collects anything that isn't right (in red); below it:
+
+- **Email service provider (ESP)** — which ESP sent the email (Klaviyo,
+  SendGrid, Mailchimp, Amazon SES, HubSpot and about thirty others), recognised
+  from known patterns in the headers (Return-Path, DKIM signing domain,
+  List-Unsubscribe, Message-ID, ESP-specific `X-` headers, `X-Mailer`) and the
+  links in the HTML. The evidence is listed with a confidence level (high /
+  likely / possible). If nothing matches, it says so — that does not mean no ESP
+  was used, only that it isn't in the tool's list.
+- **As recorded when the email was delivered** — the SPF, DKIM and DMARC results
+  the *receiving* mail server wrote into the email's `Authentication-Results`
+  header (falling back to `Received-SPF`), including which domain was checked,
+  whether it lines up with the From domain, and the DMARC policy. Anything that
+  isn't a pass is flagged, and a warning appears if neither SPF nor DKIM passed in
+  alignment with the From domain (DMARC needs one of them).
+- **The sender's DNS records (checked just now)** — a live lookup of:
+  - **SPF**: the record exists, there is exactly one, how many of the allowed 10
+    DNS lookups it uses, and how it ends (`-all`, `~all`, `?all`, `+all`).
+  - **DMARC**: the record exists (on the From domain or its parent domain), is
+    valid, and what the policy is (`none` is reported as monitoring-only, not as
+    an error).
+  - **DKIM**: for each `DKIM-Signature` in the email, the public key exists, has
+    not been revoked (empty `p=`), and its strength (under 1024-bit is flagged,
+    1024-bit noted, 2048-bit fine).
+
+What to keep in mind:
+
+- The tool **does not re-verify** SPF, DKIM or DMARC itself. The first list is
+  the receiving server's verdict *at delivery time*; the DNS list checks that the
+  sender's records exist and look sensible *today*. They can legitimately differ
+  (DNS may have changed since the email was sent).
+- It depends on the file. An email saved from a **Sent** folder, exported by a
+  tool that strips headers, or **forwarded** (which can break SPF for legitimate
+  reasons) may have no or different authentication results. When there are none,
+  the section says so — that is not treated as a failure.
+- If DNS can't be reached (offline, blocked), those rows say **"couldn't be
+  checked"** rather than reporting a record as missing.
+- Alignment is compared at the organisational-domain level (relaxed alignment),
+  which is how DMARC works by default.
 
 ## Browser dark mode is not inbox-client rendering
 
@@ -199,7 +273,9 @@ wide as the content, exactly like scrolling sideways in a browser would show.)
 ## Privacy and security
 
 **Everything runs on your machine.** Emails and screenshots are not sent to
-EmailBoutique or any other service. Screenshots are written to `output/`
+EmailBoutique or any other service. Two kinds of network requests do happen, both
+described below: the remote images an email references, and — for `.eml` files —
+DNS lookups for the sender's domains. Screenshots are written to `output/`
 (gitignored) and served back to your browser for download. Old screenshot files
 in `output/` are deleted automatically after 24 hours; uploaded files are held in
 memory only and never written to disk.
@@ -222,6 +298,13 @@ arbitrary senders. The tool handles them like this:
 
 **What this does *not* protect you from — worth knowing:**
 
+- **DNS lookups for `.eml` files.** To check the sender's SPF, DKIM and DMARC
+  records, the tool looks up DNS TXT records for the domains in the email's From,
+  Return-Path and DKIM-Signature headers, using your computer's normal DNS
+  resolver. Your DNS provider can therefore see those domain names. Only DNS
+  records are requested (at most about 30 lookups per email); the tool does not
+  connect to those domains' servers, and it validates each name before looking it
+  up.
 - **Remote images are fetched from the internet** (otherwise the screenshots
   would be missing images). That includes **tracking pixels**: rendering an email
   can make a request that tells the sender the email was "opened" from your
@@ -254,7 +337,9 @@ The server (`server.js`) drives a real headless Chrome via
    PNG (`fullPage: true`).
 
 That's four screenshots — desktop/light, desktop/dark, mobile/light,
-mobile/dark — defined in the `VARIANTS` array at the top of `server.js`.
+mobile/dark — defined in the `VARIANTS` array at the top of `server.js`. Jobs are
+processed one at a time (extra requests wait their turn), because parallel renders
+slow each other down and can hit the per-page timeout.
 
 For `.eml` files, [`mailparser`](https://www.npmjs.com/package/mailparser)
 extracts the HTML, headers and attachments, and CID images are inlined as
@@ -270,11 +355,20 @@ Two endpoints, if you want to script against it instead of using the UI:
   - `jobId`, `source` (`url` | `html` | `eml`), `widths`
   - `images` — `{ <variant>: { label, href } }`; files are served at `href`
   - `diagnostics` — dark-mode checks, HTML size, image and structure details
-  - `email` — subject, headers, attachments (`.eml` only; otherwise `null`)
+  - `preview` — `subject` and `preheader` (`{ text, source, length }`)
+  - `email` — subject, headers, attachments and `deliverability` (ESP, recorded
+    authentication results, DNS record checks and findings) — `.eml` only;
+    otherwise `null`
   - `warnings` — human-readable notes (missing images, blocked requests, …)
 
   Errors come back as `{ "error": "…" }` with a 4xx/5xx status.
 - `GET /download-all/:jobId` — streams a zip of that job's four PNGs.
+- `GET /download-batch?j=<jobId>.<name>&j=<jobId>.<name>…` — streams one zip for
+  several jobs, with a folder per job named after `<name>` (URL-encoded; the
+  extension and any unsafe characters are removed). At most 50 jobs.
+
+Each `POST /generate` still renders one source; the page sends one request per
+HTML file, in order.
 
 Requests must come from localhost (see [Privacy and security](#privacy-and-security)).
 
@@ -295,7 +389,10 @@ Requests must come from localhost (see [Privacy and security](#privacy-and-secur
 - **`Error: listen EADDRINUSE: address already in use :::4747`** — something
   is already listening on port 4747 (maybe an earlier `npm start`). Find and
   stop it: `lsof -nP -iTCP:4747 -sTCP:LISTEN`, then `kill <PID>` from the
-  output, and run `npm start` again. Or use another port: `PORT=4848 npm start`.
+  output, wait a couple of seconds, and run `npm start` again. Or use another
+  port: `PORT=4848 npm start`. The server stops on Ctrl+C, on a normal `kill`,
+  and when its terminal window is closed; a server left over from an older
+  version of the tool ignored a normal `kill`, so use `kill -9 <PID>` for that one.
 - **"The browser stopped unexpectedly" / `Connection closed`** — the headless
   Chrome died (for example after a dependency reinstall while the server kept
   running). The tool relaunches it on the next attempt, so just click **Generate**
@@ -312,6 +409,13 @@ Requests must come from localhost (see [Privacy and security](#privacy-and-secur
 - **Embedded (CID) images don't show** — the email refers to an image that isn't
   inside the `.eml` (some exports drop them). Developer Mode lists the missing
   `cid:` references.
+- **"No authentication results were found in this .eml"** — the file has no
+  `Authentication-Results` header (saved from a Sent folder, exported without
+  full headers, or never passed through a server that records results). Export
+  the message again from the *receiving* mailbox, as raw source / `.eml`.
+- **DNS rows say "couldn't be checked"** — the tool couldn't reach a DNS server
+  (offline, VPN, or a blocked resolver). The email itself is fine; try again when
+  the connection is back.
 - **"That file is larger than 25 MB"** — export the email without large
   attachments, or use the HTML file instead.
 - **A URL takes too long or fails** — there's a 30 second limit per screenshot;
