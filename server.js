@@ -475,7 +475,7 @@ function analyzeStructure(source) {
     if (attr) widths.push(Number(attr[1]));
     const style = tag.match(/\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
     if (style) {
-      for (const w of (style[1] || style[2]).matchAll(/(?:^|[;\s])(?:max-)?width\s*:\s*(\d{2,4})px/gi)) {
+      for (const w of (style[1] ?? style[2] ?? "").matchAll(/(?:^|[;\s])(?:max-)?width\s*:\s*(\d{2,4})px/gi)) {
         widths.push(Number(w[1]));
       }
     }
